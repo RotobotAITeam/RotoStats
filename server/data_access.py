@@ -22,6 +22,55 @@ def _slugify(value: str) -> str:
     return s or "unknown"
 
 
+# State abbreviations that should stay uppercase
+STATE_ABBREVS = {"AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"}
+
+
+def _format_team_name(name: str) -> str:
+    """Format team name preserving acronyms and state abbreviations."""
+    if not name:
+        return ""
+    # If the name is all caps (acronym), keep it that way
+    if name.isupper() and len(name) <= 5:
+        return name
+    # Handle special cases like "Miami (FL)", "Miami (OH)"
+    if "(" in name and ")" in name:
+        # Keep the state code uppercase inside parentheses
+        parts = name.rsplit("(", 1)
+        if len(parts) == 2:
+            prefix = parts[0].strip()
+            state_code = parts[1].replace(")", "").strip().upper()
+            return f"{prefix.title()} ({state_code})"
+    # Handle "Fla." -> "Fla." (preserve the period)
+    if "fla" in name.lower():
+        name = name.replace("Fla.", "Fla.").replace("fla.", "Fla.")
+        name = name.replace("FLA", "FLA").replace("Fla", "Fla")
+    # Otherwise use title case
+    return name.title()
+
+
+def _format_short_name(slug: str, full_name: str = "") -> str:
+    """Generate short name from slug, preserving acronyms and state abbreviations."""
+    if not slug:
+        return ""
+    # Check if full name is an acronym (all caps, short)
+    if full_name and full_name.isupper() and len(full_name) <= 5:
+        return full_name
+    # Handle state abbreviation patterns in slugs like "miami-oh", "miami-fl"
+    slug_parts = slug.split("-")
+    if len(slug_parts) >= 2:
+        last_part = slug_parts[-1].upper()
+        if last_part in STATE_ABBREVS:
+            # State abbreviation at the end - keep it uppercase
+            return " ".join(slug_parts[:-1]).title() + " " + last_part
+    # Convert slug to name and check if it looks like an acronym
+    name = slug.replace("-", " ").upper()
+    # If it's 4 chars or less, likely an acronym
+    if len(name.replace(" ", "")) <= 4:
+        return name
+    return name.title()
+
+
 def _pick(row: dict[str, Any], *keys: str, default: Any = None) -> Any:
     for key in keys:
         if key in row and row[key] is not None:
@@ -171,6 +220,48 @@ def _safe_scalar(query: str, default: Any) -> Any:
         return default
 
 
+def _compute_recent_form_all() -> dict[str, list[str]]:
+    """
+    Build last-10 W/L lists for every team by querying completed games.
+    Returns {team_id_str: ["W", "L", ...]}.
+    """
+    try:
+        rows = fetch_all(
+            """
+            SELECT home_team_id, away_team_id, home_score, away_score, game_date
+            FROM ncaab_games
+            WHERE home_score IS NOT NULL AND away_score IS NOT NULL
+            ORDER BY game_date DESC
+            """
+        )
+    except Exception as exc:
+        logger.warning("Could not fetch ncaab_games for form: %s", exc)
+        return {}
+
+    # Collect games per team, newest first (already sorted)
+    team_games: dict[str, list[str]] = {}
+    for row in rows:
+        home_id = str(row.get("home_team_id", "")).strip()
+        away_id = str(row.get("away_team_id", "")).strip()
+        home_score = _to_int(row.get("home_score"), -1)
+        away_score = _to_int(row.get("away_score"), -1)
+        if not home_id or not away_id or home_score < 0 or away_score < 0:
+            continue
+        if home_score > away_score:
+            home_result, away_result = "W", "L"
+        elif away_score > home_score:
+            home_result, away_result = "L", "W"
+        else:
+            home_result, away_result = "W", "W"  # tie — treat as W
+
+        for team_id, result in ((home_id, home_result), (away_id, away_result)):
+            lst = team_games.setdefault(team_id, [])
+            if len(lst) < 10:
+                lst.append(result)
+
+    return team_games
+
+
 def _parse_rankings(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -199,6 +290,7 @@ def get_teams() -> dict[str, dict[str, Any]]:
     power_idx = _latest_by_team_id(_safe_table("ncaab_team_power_scores"))
     standings_idx = _latest_by_team_id(_safe_table("ncaab_standings"))
     rankings_idx = _parse_rankings(_safe_table("ncaab_rankings"))
+    recent_form_by_team_id = _compute_recent_form_all()
 
     teams: dict[str, dict[str, Any]] = {}
     for row in teams_rows:
@@ -217,22 +309,34 @@ def get_teams() -> dict[str, dict[str, Any]]:
         style_tags = _to_list(_pick(power, "style_tags", "tags"))
         style_identity = str(_pick(power, "style_identity", "identity", default=""))
 
+        team_name = str(_pick(row, "team_name", "name", default=""))
+        if not team_name:
+            team_name = _format_short_name(slug)
         teams[slug] = {
             "id": slug,
-            "name": str(_pick(row, "team_name", "name", default=slug.replace("-", " ").title())),
-            "shortName": str(_pick(row, "team_abbreviation", "short_name", "abbreviation", "display_name", default=slug.replace("-", " ").title())),
+            "name": _format_team_name(team_name),
+            "shortName": str(_pick(row, "team_abbreviation", "short_name", "abbreviation", "display_name", default=_format_short_name(slug, team_name))),
             "seed": seed,
             "record": rec,
             "conference": str(_pick(row, "conference", "conference_name", default="")),
-            "ppg": _to_float(_pick(stats, "ppg", "points_per_game"), 0.0),
-            "oppg": _to_float(_pick(stats, "opp_ppg", "oppg", "opp_points_per_game"), 0.0),
-            "pace": _to_float(_pick(stats, "pace", "tempo"), 0.0),
-            "eFGPct": _to_float(_pick(stats, "efg_pct", "efg", "effective_fg_pct"), 0.0),
-            "tovPct": _to_float(_pick(stats, "tov_pct", "turnover_pct"), 0.0),
-            "orebPct": _to_float(_pick(stats, "oreb_pct", "off_reb_pct"), 0.0),
-            "sosRank": _to_int(_pick(stats, "sos_rank", "strength_of_schedule_rank"), 999),
+            "ppg": _to_float(_pick(stats, "ppg"), 0.0),
+            "oppg": _to_float(_pick(stats, "opp_ppg"), 0.0),
+            "pace": _to_float(_pick(stats, "pace"), 0.0),
+            "eFGPct": _to_float(_pick(stats, "efg_pct"), 0.0),
+            "tovPerGame": _to_float(_pick(stats, "tpg"), 0.0),
+            "orebPerGame": _to_float(_pick(stats, "oreb_pg"), 0.0),
+            "_sosScore": _to_float(_pick(power, "sos_score"), 0.0),
+            "sosRank": 999,
             "netRank": _to_int(_pick(ranks, "netRank", "net_rank"), 999),
-            "recentForm": _to_list(_pick(standing, "recent_form", "last_10"))[:10],
+            "recentForm": (
+                # Prefer DB last_10 if populated, fall back to game-log computed form
+                _to_list(_pick(standing, "recent_form", "last_10"))[:10]
+                or recent_form_by_team_id.get(team_id, [])
+            ),
+            "q1Record": _pick(standing, "quad1_record", "q1_record") or None,
+            "q2Record": _pick(standing, "quad2_record", "q2_record") or None,
+            "q3Record": _pick(standing, "quad3_record", "q3_record") or None,
+            "q4Record": _pick(standing, "quad4_record", "q4_record") or None,
             "color": str(_pick(row, "color_hex", "primary_color", "color", default="#1f2937")),
             "rotobotScore": _to_float(_pick(power, "power_score", "score"), 50.0),
             "rotobotBlurb": str(_pick(power, "rotobot_blurb", "team_blurb", default="")),
@@ -245,8 +349,8 @@ def get_teams() -> dict[str, dict[str, Any]]:
             "styleWeakness": _first_text(_pick(power, "style_weakness", "weaknesses", default=""), ""),
             "stats": {
                 "scoring": {
-                    "ppg": _to_float(_pick(stats, "ppg", "points_per_game"), 0.0),
-                    "oppg": _to_float(_pick(stats, "opp_ppg", "oppg", "opp_points_per_game"), 0.0),
+                    "ppg": _to_float(_pick(stats, "ppg"), 0.0),
+                    "oppg": _to_float(_pick(stats, "opp_ppg"), 0.0),
                     "scoringMargin": _to_float(_pick(stats, "scoring_margin"), 0.0),
                     "benchPPG": _to_float(_pick(stats, "bench_ppg"), 0.0),
                     "fastbreakPPG": _to_float(_pick(stats, "fastbreak_ppg"), 0.0),
@@ -254,56 +358,81 @@ def get_teams() -> dict[str, dict[str, Any]]:
                 "shooting": {
                     "fgPct": _to_float(_pick(stats, "fg_pct"), 0.0),
                     "fgPctDefense": _to_float(_pick(stats, "opp_fg_pct"), 0.0),
-                    "threePtPct": _to_float(_pick(stats, "three_pt_pct", "3p_pct"), 0.0),
-                    "threePtPctDefense": _to_float(_pick(stats, "opp_three_pt_pct", "opp_3p_pct"), 0.0),
-                    "threePG": _to_float(_pick(stats, "three_pt_made_pg", "three_made_pg", "three_pg"), 0.0),
-                    "threePtAttemptsPG": _to_float(_pick(stats, "three_pt_attempts_pg", "three_att_pg"), 0.0),
+                    "threePtPct": _to_float(_pick(stats, "three_pt_pct"), 0.0),
+                    "threePtPctDefense": _to_float(_pick(stats, "opp_three_pt_pct"), 0.0),
+                    "threePG": _to_float(_pick(stats, "three_pt_made_pg"), 0.0),
+                    "threePtAttemptsPG": _to_float(_pick(stats, "three_pt_attempts_pg"), 0.0),
                     "ftPct": _to_float(_pick(stats, "ft_pct"), 0.0),
                     "ftMadePG": _to_float(_pick(stats, "ft_made_pg"), 0.0),
-                    "eFGPct": _to_float(_pick(stats, "efg_pct", "effective_fg_pct"), 0.0),
+                    "eFGPct": _to_float(_pick(stats, "efg_pct"), 0.0),
                 },
                 "rebounding": {
-                    "rpg": _to_float(_pick(stats, "rpg", "rebounds_per_game"), 0.0),
+                    "rpg": _to_float(_pick(stats, "rpg"), 0.0),
                     "rebMargin": _to_float(_pick(stats, "reb_margin"), 0.0),
                     "orebPG": _to_float(_pick(stats, "oreb_pg"), 0.0),
                     "drebPG": _to_float(_pick(stats, "dreb_pg"), 0.0),
-                    "orebPct": _to_float(_pick(stats, "oreb_pct", "off_reb_pct"), 0.0),
+                    "orebPct": _to_float(_pick(stats, "oreb_pg"), 0.0),  # per game, not %
                 },
                 "ballControl": {
-                    "apg": _to_float(_pick(stats, "apg", "assists_per_game"), 0.0),
-                    "topg": _to_float(_pick(stats, "tpg", "topg", "turnovers_per_game"), 0.0),
+                    "apg": _to_float(_pick(stats, "apg"), 0.0),
+                    "topg": _to_float(_pick(stats, "tpg"), 0.0),
                     "astToRatio": _to_float(_pick(stats, "ast_to_ratio"), 0.0),
-                    "tovPct": _to_float(_pick(stats, "tov_pct", "turnover_pct"), 0.0),
+                    "tovPct": _to_float(_pick(stats, "tpg"), 0.0),  # per game, not %
                     "turnoverMargin": _to_float(_pick(stats, "turnover_margin"), 0.0),
-                    "turnoversForcedPG": _to_float(_pick(stats, "opp_tpg", "turnovers_forced_pg"), 0.0),
+                    "turnoversForcedPG": _to_float(_pick(stats, "opp_tpg"), 0.0),
                 },
                 "defense": {
-                    "spg": _to_float(_pick(stats, "spg", "steals_per_game"), 0.0),
-                    "bpg": _to_float(_pick(stats, "bpg", "blocks_per_game"), 0.0),
+                    "spg": _to_float(_pick(stats, "spg"), 0.0),
+                    "bpg": _to_float(_pick(stats, "bpg"), 0.0),
                     "fpg": _to_float(_pick(stats, "fouls_pg"), 0.0),
-                    "oppg": _to_float(_pick(stats, "opp_ppg", "oppg", "opp_points_per_game"), 0.0),
+                    "oppg": _to_float(_pick(stats, "opp_ppg"), 0.0),
                     "fgPctDefense": _to_float(_pick(stats, "opp_fg_pct"), 0.0),
                     "threePtPctDefense": _to_float(_pick(stats, "opp_three_pt_pct"), 0.0),
                 },
                 "tempo": {
-                    "pace": _to_float(_pick(stats, "pace", "tempo"), 0.0),
-                    "winPct": _to_float(_pick(stats, "win_pct"), 0.0),
+                    "pace": _to_float(_pick(stats, "pace"), 0.0),
+                    "winPct": 0.0,
                 },
                 "rankings": {
                     "netRank": _to_int(_pick(ranks, "netRank"), 999),
                     "apRank": _pick(ranks, "apRank", default=None),
-                    "sosRank": _to_int(_pick(stats, "sos_rank"), 999),
+                    "sosRank": 999,
                     "powerScore": _to_float(_pick(power, "power_score", "score"), 50.0),
                 },
                 "schedule": {
-                    "q1Record": str(_pick(standing, "quad1_record", "q1_record", default="")),
-                    "q2Record": str(_pick(standing, "quad2_record", "q2_record", default="")),
-                    "q3Record": str(_pick(standing, "quad3_record", "q3_record", default="")),
-                    "q4Record": str(_pick(standing, "quad4_record", "q4_record", default="")),
+                    "q1Record": _pick(standing, "quad1_record", "q1_record") or None,
+                    "q2Record": _pick(standing, "quad2_record", "q2_record") or None,
+                    "q3Record": _pick(standing, "quad3_record", "q3_record") or None,
+                    "q4Record": _pick(standing, "quad4_record", "q4_record") or None,
                 },
                 "percentiles": _pick(power, "percentiles", default={}) or {},
             },
         }
+
+    # Compute SOS rank from sos_score (higher score = better SOS = lower rank)
+    slugs_by_sos = sorted(
+        teams.keys(),
+        key=lambda s: teams[s].get("_sosScore", 0),
+        reverse=True,
+    )
+    for rank, slug in enumerate(slugs_by_sos, start=1):
+        teams[slug]["sosRank"] = rank
+        teams[slug]["stats"]["rankings"]["sosRank"] = rank
+        del teams[slug]["_sosScore"]
+
+    # Compute win % from the record string (more reliable than stats.wins)
+    for slug, team in teams.items():
+        rec = team.get("record", "")
+        if rec and "-" in rec:
+            parts = rec.split("-")
+            try:
+                w = int(parts[0])
+                total = sum(int(p) for p in parts)
+                if total > 0:
+                    team["stats"]["tempo"]["winPct"] = w / total
+            except (ValueError, IndexError):
+                pass
+
     return teams
 
 
@@ -375,16 +504,148 @@ def get_all_players() -> dict[str, list[dict[str, Any]]]:
 
 
 def _team_for_bracket(teams: dict[str, dict[str, Any]], slug: str) -> dict[str, Any]:
-    return teams.get(slug, {"id": slug, "name": slug.replace("-", " ").title(), "shortName": slug})
+    return teams.get(slug, {"id": slug, "name": _format_short_name(slug), "shortName": _format_short_name(slug)})
 
 
 def _round_from_row(row: dict[str, Any]) -> int:
     return _to_int(_pick(row, "round", "round_number", "tournament_round"), 1)
 
 
+def _load_team_odds() -> dict[str, dict[str, Any]]:
+    """Load latest odds per team from ncaab_event_odds."""
+    rows = _safe_table("ncaab_event_odds")
+    if not rows:
+        return {}
+
+    teams_rows = _safe_table("ncaab_teams")
+    team_id_to_slug: dict[str, str] = {}
+    for tr in teams_rows:
+        tid = str(tr.get("team_id", "")).strip()
+        slug = _team_key(tr)
+        if tid and slug:
+            team_id_to_slug[tid] = slug
+
+    odds_by_slug: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        home_id = str(row.get("home_team_id", "")).strip()
+        away_id = str(row.get("away_team_id", "")).strip()
+        home_slug = team_id_to_slug.get(home_id, "")
+        away_slug = team_id_to_slug.get(away_id, "")
+        if not home_slug or not away_slug:
+            continue
+
+        pair_key = f"{home_slug}__{away_slug}"
+        existing = odds_by_slug.get(pair_key)
+        if existing and str(row.get("updated_at", "")) <= str(existing.get("_ts", "")):
+            continue
+
+        odds_by_slug[pair_key] = {
+            "_ts": str(row.get("updated_at", "")),
+            "homeSlug": home_slug,
+            "awaySlug": away_slug,
+            "homeML": _to_int(row.get("home_moneyline"), 0),
+            "awayML": _to_int(row.get("away_moneyline"), 0),
+            "spread": _to_float(row.get("spread") or row.get("home_spread"), 0),
+            "total": _to_float(row.get("total") or row.get("over_under"), 0),
+        }
+
+    flat: dict[str, dict[str, Any]] = {}
+    for _, data in odds_by_slug.items():
+        for slug in (data["homeSlug"], data["awaySlug"]):
+            flat[slug] = data
+    return flat
+
+
 def get_bracket(teams: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    # Deterministic bracket generation from Postgres-backed bracketology engine.
-    return run_bracketology(shuffle=False, variance=0.0, seed=None)
+    bracket = run_bracketology(shuffle=False, variance=0.0, seed=None)
+
+    team_odds = _load_team_odds()
+
+    analysis_rows = _safe_table("ncaab_matchup_analyses")
+
+    bracket_narratives: dict[str, dict[str, Any]] = {}
+    try:
+        narrative_rows = fetch_all(
+            "SELECT * FROM ncaab_matchup_notes WHERE note_type = 'bracket_narrative'"
+        )
+        for nr in narrative_rows:
+            gid = str(nr.get("game_id", ""))
+            if not gid.startswith("bracket-"):
+                continue
+            parts = gid.replace("bracket-", "").split("-vs-")
+            if len(parts) == 2:
+                try:
+                    parsed = json.loads(str(nr.get("analysis", "{}")))
+                    bracket_narratives[(parts[0], parts[1])] = parsed
+                    bracket_narratives[(parts[1], parts[0])] = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+    except Exception as exc:
+        logger.warning("Could not load bracket narratives: %s", exc)
+    analysis_by_slugs: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in analysis_rows:
+        s1 = _team_key({"team_slug": _pick(row, "team1_slug", "home_team_slug", default="")})
+        s2 = _team_key({"team_slug": _pick(row, "team2_slug", "away_team_slug", default="")})
+        if s1 and s2:
+            # Store under both orderings for lookup
+            analysis_by_slugs[(s1, s2)] = row
+            analysis_by_slugs[(s2, s1)] = row
+    
+    # Merge full team data and analysis into matchups
+    for matchup in bracket.get("matchups", []):
+        slug1 = matchup.get("team1Slug")
+        slug2 = matchup.get("team2Slug")
+        
+        if slug1 and slug1 in teams:
+            matchup["team1Full"] = teams[slug1]
+        if slug2 and slug2 in teams:
+            matchup["team2Full"] = teams[slug2]
+
+        odds = team_odds.get(slug1) or team_odds.get(slug2)
+        if odds and odds.get("total"):
+            matchup["odds"] = {
+                "homeML": odds["homeML"],
+                "awayML": odds["awayML"],
+                "spread": odds["spread"],
+                "total": odds["total"],
+            }
+        
+        # Merge matchup analysis if available
+        analysis_row = analysis_by_slugs.get((slug1, slug2))
+        if analysis_row:
+            rec = str(_pick(analysis_row, "recommendation", default="")).strip()
+            factors = _pick(analysis_row, "factors", default={})
+            if isinstance(factors, dict):
+                analysis_text = json.dumps(factors)
+            else:
+                analysis_text = str(factors or "")
+            if rec and not analysis_text:
+                analysis_text = rec
+            
+            # Only override if we have actual data
+            if analysis_text:
+                matchup["analysis"] = analysis_text
+            if rec:
+                matchup["rotobotPick"] = rec
+                matchup["pickReasoning"] = str(_pick(analysis_row, "reasoning", "pick_reasoning", default=""))
+            confidence = _to_int(_pick(analysis_row, "confidence", "confidence_score", default=0), 0)
+            if confidence > 0:
+                matchup["rotobotConfidence"] = confidence
+
+        if not matchup.get("analysis") or matchup["analysis"] == "":
+            narrative = bracket_narratives.get((slug1, slug2))
+            if narrative:
+                matchup["analysis"] = narrative.get("analysis", "")
+                matchup["proTeam1"] = narrative.get("proTeam1", [])
+                matchup["proTeam2"] = narrative.get("proTeam2", [])
+                if narrative.get("rotobotPick"):
+                    matchup["rotobotPick"] = narrative["rotobotPick"]
+                if narrative.get("rotobotConfidence"):
+                    matchup["rotobotConfidence"] = int(narrative["rotobotConfidence"])
+                if narrative.get("pickReasoning"):
+                    matchup["pickReasoning"] = narrative["pickReasoning"]
+
+    return bracket
 
 
 def get_summary(teams: dict[str, dict[str, Any]], players: dict[str, list[dict[str, Any]]], bracket: dict[str, Any]) -> dict[str, Any]:
