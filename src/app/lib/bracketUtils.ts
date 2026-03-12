@@ -19,6 +19,7 @@ export function rawMatchupToGame(raw: BracketMatchupRaw): Game {
     proTeam1: raw.proTeam1 ?? [],
     proTeam2: raw.proTeam2 ?? [],
     pickReasoning: raw.pickReasoning ?? "",
+    odds: (raw as any).odds,
   };
 }
 
@@ -64,10 +65,10 @@ export function makeGameStub(
     team1,
     team2,
     rotobotPick: team1.rotobotScore >= team2.rotobotScore ? team1.name : team2.name,
-    rotobotConfidence: Math.min(
+    rotobotConfidence: Math.round(Math.min(
       92,
       Math.max(52, 50 + Math.abs(team1.rotobotScore - team2.rotobotScore) * 2.2)
-    ),
+    )),
     analysis: "",
     proTeam1: [],
     proTeam2: [],
