@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Brain, Loader2, ChevronDown, ChevronUp, Zap } from "lucide-react";
+import { Brain, ChevronDown, ChevronUp, Zap } from "lucide-react";
 import type { Game, ViewMode } from "../types/bracket";
 import { TeamLogo } from "./TeamLogo";
 
@@ -9,7 +9,6 @@ interface BracketGameProps {
   userPick?: string;
   onPick?: (gameId: string, teamId: string) => void;
   compact?: boolean;
-  isLoading?: boolean;
   viewMode?: ViewMode;
 }
 
@@ -18,7 +17,7 @@ function isRotobotPick(game: Game, teamId: string, teamName: string): boolean {
   return pick === teamId || pick === teamName;
 }
 
-export function BracketGameCard({ game, userPick, onPick, compact = false, isLoading = false, viewMode = "user" }: BracketGameProps) {
+export function BracketGameCard({ game, userPick, onPick, compact = false, viewMode = "user" }: BracketGameProps) {
   const [expanded, setExpanded] = useState(false);
   const navigate = useNavigate();
   const hasAnalysis = !!(game.analysis || game.pickReasoning);
@@ -72,7 +71,7 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
                   style={{
                     width: 20, height: 20,
                     background: isRotoPick ? "rgba(0,184,219,0.18)" : "rgba(255,255,255,0.06)",
-                    fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 700,
+                    fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 700,
                     color: isRotoPick ? "#00b8db" : "rgba(255,255,255,0.4)",
                   }}
                 >
@@ -84,7 +83,7 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
                 <span
                   className="flex-1 truncate"
                   style={{
-                    fontFamily: "Rubik, sans-serif", fontSize: compact ? 11 : 12,
+                    fontFamily: "Rubik, sans-serif", fontSize: compact ? 15 : 16,
                     fontWeight: isRotoPick || isUserPick ? 600 : 400,
                     color: isRotoPick || isUserPick ? "white" : "rgba(255,255,255,0.55)",
                   }}
@@ -97,7 +96,7 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
                     <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#22c55e" }} />
                   )}
                   {isRotoPick && !compact && (
-                    <Brain size={9} color="#00b8db" />
+                    <Brain size={14} color="#00b8db" />
                   )}
                 </div>
               </div>
@@ -106,32 +105,30 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
 
           {!compact && (
             <div className="px-2.5 py-1.5 flex items-center gap-1" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-              {isLoading ? (
-                <div className="flex items-center gap-1.5 w-full">
-                  <Loader2 size={9} className="animate-spin" color="#00b8db" />
-                  <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 9, color: "rgba(0,184,219,0.6)" }}>Analyzing...</span>
-                </div>
-              ) : (
-                <>
-                  <div className="flex-1 h-0.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
-                    <div className="h-full rounded-full" style={{
-                      width: `${game.rotobotConfidence}%`,
-                      background: game.rotobotConfidence >= 80 ? "#00b8db" : game.rotobotConfidence >= 60 ? "#3c84ff" : "#f59e0b",
-                    }} />
-                  </div>
-                  <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 9, color: "rgba(255,255,255,0.3)", minWidth: 24, textAlign: "right" }}>
-                    {game.rotobotConfidence}%
-                  </span>
-                  {hasAnalysis && (
-                    <button
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); }}
-                      className="ml-0.5 p-0.5 rounded transition-all hover:bg-white/10"
-                      style={{ background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}
-                    >
-                      {expanded ? <ChevronUp size={10} color="rgba(255,255,255,0.4)" /> : <ChevronDown size={10} color="rgba(255,255,255,0.4)" />}
-                    </button>
-                  )}
-                </>
+              <div className="flex-1 h-0.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.07)" }}>
+                <div className="h-full rounded-full" style={{
+                  width: `${game.rotobotConfidence}%`,
+                  background: game.rotobotConfidence >= 80 ? "#00b8db" : game.rotobotConfidence >= 60 ? "#3c84ff" : "#f59e0b",
+                }} />
+              </div>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.5)", minWidth: 28, textAlign: "right" }}>
+                {Math.round(game.rotobotConfidence)}%
+              </span>
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/matchup/${game.id}`); }}
+                className="ml-1 px-1.5 py-0.5 rounded text-[11px] font-semibold transition-all hover:bg-[rgba(0,184,219,0.15)]"
+                style={{ background: "rgba(0,184,219,0.08)", border: "none", cursor: "pointer", color: "#00b8db" }}
+              >
+                Analysis
+              </button>
+              {hasAnalysis && (
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); }}
+                  className="ml-0.5 p-0.5 rounded transition-all hover:bg-white/10"
+                  style={{ background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}
+                >
+                  {expanded ? <ChevronUp size={10} color="rgba(255,255,255,0.4)" /> : <ChevronDown size={10} color="rgba(255,255,255,0.4)" />}
+                </button>
               )}
             </div>
           )}
@@ -144,15 +141,15 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
         }}>
           {game.rotobotPick && (
             <div className="flex items-center gap-1 mb-1.5">
-              <Zap size={8} color="#00b8db" />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 9, fontWeight: 600, color: "#00b8db" }}>
+              <Zap size={10} color="#00b8db" />
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 600, color: "#00b8db" }}>
                 Pick: {game.rotobotPick}
               </span>
             </div>
           )}
           <p style={{
-            fontFamily: "Rubik, sans-serif", fontSize: 9, color: "rgba(255,255,255,0.5)",
-            lineHeight: 1.4, margin: 0,
+            fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.55)",
+            lineHeight: 1.5, margin: 0,
             display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden",
           }}>
             {game.pickReasoning || game.analysis}
@@ -162,7 +159,7 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
               {[game.team1, game.team2].map((team) =>
                 (team.styleTags || []).slice(0, 1).filter(t => t && t !== "nan").map((tag) => (
                   <span key={`${team.id}-${tag}`} style={{
-                    fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.4)",
+                    fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 500, color: "rgba(255,255,255,0.5)",
                     background: "rgba(255,255,255,0.05)", padding: "1px 4px", borderRadius: 4,
                   }}>
                     {team.shortName}: {tag}
@@ -172,7 +169,7 @@ export function BracketGameCard({ game, userPick, onPick, compact = false, isLoa
             </div>
           )}
           <Link to={`/matchup/${game.id}`} className="no-underline block mt-1.5"
-            style={{ fontFamily: "Rubik, sans-serif", fontSize: 9, color: "#00b8db", fontWeight: 500 }}>
+            style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "#00b8db", fontWeight: 600 }}>
             Full analysis →
           </Link>
         </div>

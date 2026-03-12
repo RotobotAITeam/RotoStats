@@ -468,6 +468,18 @@ def generate_matchups(regions: dict[str, list[dict[str, Any]]]) -> list[dict[str
             if team_a is None or team_b is None:
                 continue
             game_counter += 1
+            
+            # Calculate confidence based on committee score difference
+            score_a = float(team_a.get("committee_score", 50))
+            score_b = float(team_b.get("committee_score", 50))
+            score_diff = abs(score_a - score_b)
+            
+            # Base confidence 50%, add up to 45% based on score diff (capped at 95%)
+            confidence = min(95, int(50 + (score_diff * 2)))
+            
+            # Pick the team with higher committee score
+            pick_team = team_a if score_a >= score_b else team_b
+            
             games.append(
                 {
                     "id": f"{region_name.lower()}-r1-{game_counter}",
@@ -478,23 +490,23 @@ def generate_matchups(regions: dict[str, list[dict[str, Any]]]) -> list[dict[str
                     "team1": team_a["team_name"],
                     "team1Slug": team_a["team_slug"],
                     "team1NetRank": team_a["net_rank"],
-                    "team1Score": team_a["committee_score"],
+                    "team1Score": score_a,
                     "team1Record": team_a["record"],
                     "team1Conference": team_a["conference"],
                     "team1AutoBid": team_a.get("is_auto_bid", False),
                     "team2": team_b["team_name"],
                     "team2Slug": team_b["team_slug"],
                     "team2NetRank": team_b["net_rank"],
-                    "team2Score": team_b["committee_score"],
+                    "team2Score": score_b,
                     "team2Record": team_b["record"],
                     "team2Conference": team_b["conference"],
                     "team2AutoBid": team_b.get("is_auto_bid", False),
                     "analysis": "",
                     "proTeam1": [],
                     "proTeam2": [],
-                    "rotobotPick": "",
-                    "rotobotConfidence": 55,
-                    "pickReasoning": "",
+                    "rotobotPick": pick_team["team_name"],
+                    "rotobotConfidence": confidence,
+                    "pickReasoning": f"Based on RotoBot Score: {pick_team['team_name']} ({pick_team['committee_score']:.1f})",
                 }
             )
     return games

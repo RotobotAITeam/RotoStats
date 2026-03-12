@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router";
-import { Download, Brain, CheckCircle, Share2, Loader2, Trophy } from "lucide-react";
+import { Download, Brain, CheckCircle, Share2, Loader2, Trophy, Zap } from "lucide-react";
+import { toPng } from "html-to-image";
 import { BracketGameCard, BracketConnector } from "./BracketGame";
 import { useBracket } from "../context/BracketContext";
 import type { Game, ViewMode } from "../types/bracket";
@@ -29,14 +30,14 @@ function RoundColumn({
       <div className="flex flex-col" style={{ height: totalHeight, width: 210 }}>
         <div className="text-center pb-2">
           <span style={{
-            fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 700,
-            color: "rgba(255,255,255,0.15)", textTransform: "uppercase", letterSpacing: "1px",
+            fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700,
+            color: "rgba(255,255,255,0.25)", textTransform: "uppercase", letterSpacing: "1px",
           }}>
             {label}
           </span>
         </div>
         <div className="flex flex-col flex-1 items-center justify-center">
-          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.15)" }}>
+          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.15)" }}>
             Pick winners to advance
           </span>
         </div>
@@ -48,8 +49,8 @@ function RoundColumn({
     <div className="flex flex-col" style={{ height: totalHeight, width: 210 }}>
       <div className="text-center pb-2">
         <span style={{
-          fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 700,
-          color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "1px",
+            fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700,
+            color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "1px",
         }}>
           {label}
         </span>
@@ -111,7 +112,7 @@ function RegionBracket({
         <div className="flex flex-col" style={{ height: BRACKET_H, width: 210 }}>
           <div className="text-center pb-2">
             <span style={{
-              fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 700,
+              fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 700,
               color: "#00b8db", textTransform: "uppercase", letterSpacing: "1px",
             }}>
               Elite 8
@@ -129,13 +130,13 @@ function RegionBracket({
                   }}>
                     <div className="flex items-center gap-1.5 mb-1">
                       <Trophy size={10} color="#00b8db" />
-                      <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, color: "#00b8db", fontWeight: 600 }}>
+                      <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "#00b8db", fontWeight: 700 }}>
                         Regional Champion
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded shrink-0" style={{ background: `${winner.color}33` }} />
-                      <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, fontWeight: 700, color: "white" }}>
+                      <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "white" }}>
                         {winner.shortName}
                       </span>
                     </div>
@@ -143,7 +144,7 @@ function RegionBracket({
                 )}
               </>
             ) : (
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.15)" }}>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.15)" }}>
                 Pick winners to advance
               </span>
             )}
@@ -170,9 +171,9 @@ export function BracketScreen() {
     makePick,
     clearPicks,
     setViewMode,
+    setUpsetTolerance,
     getShareURL,
     getFinalFourTeams,
-    requestNarrative,
     getRegionGames,
   } = useBracket();
 
@@ -180,6 +181,7 @@ export function BracketScreen() {
   const initialRegion = searchParams.get("region") || "East";
   const [activeRegion, setActiveRegion] = useState(initialRegion);
   const [copied, setCopied] = useState(false);
+  const bracketRef = useRef<HTMLDivElement>(null);
 
   const { userPicks, viewMode, dataLoaded, dataError } = state;
 
@@ -189,17 +191,6 @@ export function BracketScreen() {
 
   const ffTeams = getFinalFourTeams();
   const ffUnlocked = ffTeams.every((t) => t !== null);
-
-  // Auto-request narratives for newly formed later-round games
-  const { r2, s16, e8 } = getRegionGames(activeRegion);
-  useEffect(() => {
-    const liveGames = [...r2, ...s16, ...e8].filter((g) => g.isLive);
-    for (const g of liveGames) {
-      if (g.team1?.id && g.team2?.id && !g.analysis) {
-        requestNarrative(g.team1.id, g.team2.id, g.round, g.region);
-      }
-    }
-  }, [r2, s16, e8, requestNarrative]);
 
   const handlePick = (gameId: string, teamId: string) => {
     if (viewMode === "rotobot") {
@@ -214,6 +205,33 @@ export function BracketScreen() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const handleDownloadPNG = useCallback(async () => {
+    if (!bracketRef.current) return;
+    
+    try {
+      const dataUrl = await toPng(bracketRef.current, {
+        backgroundColor: "#030712",
+        pixelRatio: 2,
+        cacheBust: true,
+        skipFonts: false,
+        filter: (node) => {
+          // Skip any potential UI overlays
+          return node.tagName !== "BUTTON" || !node.classList.contains("fixed");
+        },
+      });
+      
+      const link = document.createElement("a");
+      link.download = `bracket-${activeRegion.toLowerCase()}-${viewMode}-${new Date().toISOString().slice(0,10)}.png`;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("PNG export failed:", err);
+      alert("Could not generate PNG. Please try again.");
+    }
+  }, [activeRegion, viewMode]);
 
   if (!dataLoaded) {
     return (
@@ -235,10 +253,10 @@ export function BracketScreen() {
           <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "#ef4444" }}>
             Failed to load data
           </span>
-          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, color: "rgba(255,255,255,0.5)" }}>
+          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.5)" }}>
             {dataError}
           </span>
-          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, color: "rgba(255,255,255,0.3)" }}>
+          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.3)" }}>
             Make sure the API server is running on port 8002
           </span>
         </div>
@@ -272,14 +290,14 @@ export function BracketScreen() {
                 style={{
                   background: "rgba(245,158,11,0.15)",
                   border: "1px solid rgba(245,158,11,0.3)",
-                  fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 700,
+                  fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 700,
                   color: "#f59e0b", textTransform: "uppercase", letterSpacing: "0.5px",
                 }}
               >
                 Projections
               </div>
             </div>
-            <p style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
+            <p style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.4)" }}>
               {viewMode === "user"
                 ? "Make your picks — click a team to advance them."
                 : "Viewing RotoBot's AI-generated bracket predictions."}
@@ -293,10 +311,10 @@ export function BracketScreen() {
           >
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between gap-6">
-                <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+                <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
                   My Picks
                 </span>
-                <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, fontWeight: 700, color: "#00b8db" }}>
+                <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 700, color: "#00b8db" }}>
                   {pickedCount}/{totalGames}
                 </span>
               </div>
@@ -326,7 +344,7 @@ export function BracketScreen() {
                 onClick={() => setActiveRegion(region)}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all"
                 style={{
-                  fontFamily: "Rubik, sans-serif", fontSize: 13,
+                  fontFamily: "Rubik, sans-serif", fontSize: 16,
                   fontWeight: activeRegion === region ? 700 : 400,
                   color: activeRegion === region ? "white" : "rgba(255,255,255,0.45)",
                   background: activeRegion === region ? `${REGION_COLORS[region]}22` : "transparent",
@@ -347,7 +365,7 @@ export function BracketScreen() {
                 onClick={() => setActiveRegion("FinalFour")}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all"
                 style={{
-                  fontFamily: "Rubik, sans-serif", fontSize: 13,
+                  fontFamily: "Rubik, sans-serif", fontSize: 16,
                   fontWeight: activeRegion === "FinalFour" ? 700 : 400,
                   color: activeRegion === "FinalFour" ? "white" : "#f59e0b",
                   background: activeRegion === "FinalFour" ? "rgba(245,158,11,0.2)" : "transparent",
@@ -360,6 +378,35 @@ export function BracketScreen() {
               </button>
             )}
           </div>
+
+          {/* Upset Tolerance Slider — only in rotobot view */}
+          {viewMode === "rotobot" && (
+            <div
+              className="flex items-center gap-3 px-3 py-2 rounded-xl"
+              style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", minWidth: 220 }}
+            >
+              <Zap size={13} color={state.upsetTolerance > 50 ? "#f59e0b" : "#00b8db"} className="shrink-0" />
+              <div className="flex-1 flex flex-col gap-0.5">
+                <div className="flex items-center justify-between">
+                  <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.6)" }}>Upsets</span>
+                  <span style={{
+                    fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 700,
+                    color: state.upsetTolerance === 0 ? "#00b8db" : state.upsetTolerance < 40 ? "#3c84ff" : state.upsetTolerance < 70 ? "#f59e0b" : "#ef4444",
+                  }}>{state.upsetTolerance}%</span>
+                </div>
+                <input
+                  type="range" min={0} max={100} step={5}
+                  value={state.upsetTolerance}
+                  onChange={(e) => setUpsetTolerance(Number(e.target.value))}
+                  style={{
+                    appearance: "none", width: "100%", height: 4, borderRadius: 2,
+                    background: `linear-gradient(90deg, #00b8db ${state.upsetTolerance}%, rgba(255,255,255,0.1) ${state.upsetTolerance}%)`,
+                    outline: "none", cursor: "pointer",
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
           {/* View mode toggle */}
           <div
@@ -375,7 +422,7 @@ export function BracketScreen() {
                 onClick={() => setViewMode(id)}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg transition-all"
                 style={{
-                  fontFamily: "Rubik, sans-serif", fontSize: 12,
+                  fontFamily: "Rubik, sans-serif", fontSize: 16,
                   fontWeight: viewMode === id ? 600 : 400,
                   color: viewMode === id ? "white" : "rgba(255,255,255,0.4)",
                   background: viewMode === id ? "rgba(255,255,255,0.1)" : "transparent",
@@ -402,14 +449,14 @@ export function BracketScreen() {
             <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 700, color: "white" }}>
               {activeRegion} Region
             </span>
-            <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, color: "rgba(255,255,255,0.35)" }}>
+            <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 500, color: "rgba(255,255,255,0.5)" }}>
               {viewMode === "user"
                 ? "Click a team name to pick them"
-                : "RotoBot's projected bracket"}
+                : `RotoBot bracket${state.upsetTolerance > 0 ? ` · ${state.upsetTolerance}% upset tolerance` : ""}`}
             </span>
             <div className="ml-auto flex items-center gap-2">
               <Brain size={12} color="#00b8db" />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "#00b8db" }}>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 500, color: "#00b8db" }}>
                 Click any game for AI analysis
               </span>
             </div>
@@ -418,6 +465,8 @@ export function BracketScreen() {
 
         {/* Bracket content */}
         <div
+          ref={bracketRef}
+          data-bracket-export
           className="rounded-2xl p-4 overflow-hidden"
           style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}
         >
@@ -438,13 +487,13 @@ export function BracketScreen() {
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <Brain size={11} color="#00b8db" />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
                 RotoBot's pick
               </span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full" style={{ background: "#22c55e" }} />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
                 Your pick
               </span>
             </div>
@@ -457,7 +506,7 @@ export function BracketScreen() {
                 style={{
                   background: "rgba(239,68,68,0.1)",
                   border: "1px solid rgba(239,68,68,0.2)",
-                  fontFamily: "Rubik, sans-serif", fontSize: 12, fontWeight: 500,
+                  fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 500,
                   color: "#ef4444", cursor: "pointer",
                 }}
               >
@@ -470,12 +519,25 @@ export function BracketScreen() {
               style={{
                 background: "rgba(255,255,255,0.05)",
                 border: "1px solid rgba(255,255,255,0.1)",
-                fontFamily: "Rubik, sans-serif", fontSize: 12, fontWeight: 500,
+                fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 500,
                 color: "rgba(255,255,255,0.7)", cursor: "pointer",
               }}
             >
               <Share2 size={13} />
               {copied ? "Copied!" : "Share Bracket"}
+            </button>
+            <button
+              onClick={handleDownloadPNG}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl transition-all hover:opacity-80"
+              style={{
+                background: "rgba(0,184,219,0.08)",
+                border: "1px solid rgba(0,184,219,0.2)",
+                fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 500,
+                color: "#00b8db", cursor: "pointer",
+              }}
+            >
+              <Download size={13} />
+              Save as PNG
             </button>
           </div>
         </div>
@@ -543,7 +605,7 @@ function FinalFourView() {
       <div className="flex gap-8 flex-wrap justify-center">
         {semis.map((game) => (
           <div key={game.id} className="flex flex-col items-center gap-2">
-            <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.3)", textTransform: "uppercase" }}>
+            <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.3)", textTransform: "uppercase" }}>
               {game.id === "ff-semi-1" ? "East vs West" : "South vs Midwest"}
             </span>
             <BracketGameCard
