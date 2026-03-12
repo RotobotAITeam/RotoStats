@@ -15,13 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from server.ai import (
-    GeminiClient,
     PerplexityClient,
     _cache_path,
     _write_cache,
     fetch_matchup_trends,
     fetch_team_news,
-    generate_matchup_narrative,
 )
 from server.data_access import (
     get_all_players,
@@ -30,7 +28,6 @@ from server.data_access import (
     get_health,
     get_news_context,
     get_power_rankings,
-    get_precomputed_matchup,
     get_summary,
     get_teams,
 )
@@ -72,12 +69,14 @@ def root():
 
 _cache: dict[str, tuple[float, Any]] = {}
 CACHE_TTL = int(os.getenv("API_CACHE_TTL_SECONDS", "60"))
+BRACKET_CACHE_TTL = int(os.getenv("BRACKET_CACHE_TTL_SECONDS", "3600"))
 
 
-def _cached(key: str, loader):
+def _cached(key: str, loader, ttl: int | None = None):
     now = time.time()
+    effective_ttl = ttl if ttl is not None else CACHE_TTL
     cached = _cache.get(key)
-    if cached and now - cached[0] < CACHE_TTL:
+    if cached and now - cached[0] < effective_ttl:
         return cached[1]
     value = loader()
     _cache[key] = (now, value)
@@ -93,7 +92,7 @@ def _players() -> dict[str, list[dict[str, Any]]]:
 
 
 def _bracket() -> dict[str, Any]:
-    return _cached("bracket", lambda: get_bracket(_teams()))
+    return _cached("bracket", lambda: get_bracket(_teams()), ttl=BRACKET_CACHE_TTL)
 
 
 def _summary() -> dict[str, Any]:
@@ -109,9 +108,7 @@ def _power_rankings() -> list[dict[str, Any]]:
 
 
 _news_cache: dict[str, str] = {}
-_narrative_memory_cache: dict[str, dict[str, Any]] = {}
 _trends_cache: dict[str, str] = {}
-_gemini_client: GeminiClient | None = None
 _espn_manifest: dict[str, Any] | None = None
 
 
@@ -154,23 +151,6 @@ def api_power_rankings():
     return _power_rankings()
 
 
-class MatchupRequest(BaseModel):
-    team1Slug: str
-    team2Slug: str
-    round: int = 2
-    region: str = "East"
-
-
-def _get_gemini_client() -> GeminiClient:
-    global _gemini_client
-    if _gemini_client is None:
-        key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not key:
-            raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
-        _gemini_client = GeminiClient(key)
-    return _gemini_client
-
-
 def _load_news_cache() -> dict[str, str]:
     global _news_cache
     if _news_cache:
@@ -197,57 +177,6 @@ def api_all_news():
 @app.get("/api/news/{team_slug}")
 def api_team_news(team_slug: str):
     return {"slug": team_slug, "news": _load_news_cache().get(team_slug, "")}
-
-
-@app.post("/api/matchup")
-def api_matchup(req: MatchupRequest):
-    key = f"{req.team1Slug}_vs_{req.team2Slug}"
-    if key in _narrative_memory_cache:
-        return _narrative_memory_cache[key]
-
-    precomputed = get_precomputed_matchup(req.team1Slug, req.team2Slug)
-    if precomputed and precomputed.get("analysis"):
-        _narrative_memory_cache[key] = precomputed
-        return precomputed
-
-    teams = _teams()
-    team1 = teams.get(req.team1Slug)
-    team2 = teams.get(req.team2Slug)
-    if not team1:
-        raise HTTPException(status_code=404, detail=f"Team not found: {req.team1Slug}")
-    if not team2:
-        raise HTTPException(status_code=404, detail=f"Team not found: {req.team2Slug}")
-
-    game = {
-        "id": f"{req.region.lower()}-r{req.round}-live",
-        "round": req.round,
-        "region": req.region,
-        "team1Seed": team1.get("seed", 0),
-        "team2Seed": team2.get("seed", 0),
-        "team1": team1.get("name", req.team1Slug),
-        "team1Slug": req.team1Slug,
-        "team2": team2.get("name", req.team2Slug),
-        "team2Slug": req.team2Slug,
-    }
-    news = _load_news_cache()
-    narrative = generate_matchup_narrative(
-        _get_gemini_client(),
-        game,
-        team1,
-        team2,
-        news.get(req.team1Slug, ""),
-        news.get(req.team2Slug, ""),
-    )
-    out = {
-        "analysis": narrative.get("analysis", ""),
-        "proTeam1": narrative.get("proTeam1", []),
-        "proTeam2": narrative.get("proTeam2", []),
-        "rotobotPick": narrative.get("rotobotPick", ""),
-        "rotobotConfidence": int(narrative.get("rotobotConfidence", 55) or 55),
-        "pickReasoning": narrative.get("pickReasoning", ""),
-    }
-    _narrative_memory_cache[key] = out
-    return out
 
 
 class NewsFetchRequest(BaseModel):
@@ -323,17 +252,49 @@ def api_trends_fetch(req: TrendsFetchRequest):
     return {"key": key, "trends": content, "cached": False}
 
 
+SLUG_ALIASES: dict[str, str] = {
+    "south-florida": "south-fla",
+    "south-alabama": "south-ala",
+    "southeast-missouri-state": "southeast-mo-st",
+    "south-dakota-state": "south-dakota-st",
+    "southern-illinois": "southern-ill",
+    "south-carolina-state": "south-carolina-st",
+    "southern-indiana": "southern-ind",
+    "southeastern-louisiana": "southeastern-la",
+}
+
+
 def _load_espn_manifest() -> dict[str, Any]:
     global _espn_manifest
     if _espn_manifest is not None:
         return _espn_manifest
     if ESPN_MANIFEST_PATH.exists():
         try:
-            _espn_manifest = json.loads(ESPN_MANIFEST_PATH.read_text(encoding="utf-8"))
+            raw = json.loads(ESPN_MANIFEST_PATH.read_text(encoding="utf-8"))
         except Exception:
-            _espn_manifest = {"logos": {}, "headshots": {}}
+            raw = {"logos": {}, "headshots": {}}
     else:
-        _espn_manifest = {"logos": {}, "headshots": {}}
+        raw = {"logos": {}, "headshots": {}}
+
+    logos = raw.get("logos", {})
+    headshots = raw.get("headshots", {})
+    for db_slug, espn_slug in SLUG_ALIASES.items():
+        if espn_slug in logos and db_slug not in logos:
+            logos[db_slug] = logos[espn_slug]
+        if espn_slug in headshots and db_slug not in headshots:
+            headshots[db_slug] = headshots[espn_slug]
+
+    # Override logos whose S3 images are wrong with ESPN CDN originals
+    LOGO_OVERRIDES: dict[str, str] = {
+        "ohio-st": "https://a.espncdn.com/i/teamlogos/ncaa/500/194.png",
+        "south-fla": "https://a.espncdn.com/i/teamlogos/ncaa/500/58.png",
+    }
+    for slug, url in LOGO_OVERRIDES.items():
+        logos[slug] = url
+
+    raw["logos"] = logos
+    raw["headshots"] = headshots
+    _espn_manifest = raw
     return _espn_manifest
 
 
@@ -344,7 +305,10 @@ def api_espn_logos():
 
 @app.get("/api/espn/roster/{team_slug}")
 def api_espn_roster(team_slug: str):
-    hs = _load_espn_manifest().get("headshots", {}).get(team_slug, {})
+    resolved = SLUG_ALIASES.get(team_slug, team_slug)
+    hs = _load_espn_manifest().get("headshots", {}).get(resolved, {})
+    if not hs:
+        hs = _load_espn_manifest().get("headshots", {}).get(team_slug, {})
     return [{"name": name, "headshot": url} for name, url in hs.items()]
 
 
@@ -360,6 +324,5 @@ def api_health():
 def api_clear_cache():
     _cache.clear()
     _news_cache.clear()
-    _narrative_memory_cache.clear()
     _trends_cache.clear()
     return {"status": "cleared"}

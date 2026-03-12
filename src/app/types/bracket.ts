@@ -59,10 +59,10 @@ export interface RankingStats {
 }
 
 export interface ScheduleStats {
-  q1Record: string;
-  q2Record: string;
-  q3Record: string;
-  q4Record: string;
+  q1Record: string | null;
+  q2Record: string | null;
+  q3Record: string | null;
+  q4Record: string | null;
 }
 
 export interface TeamStats {
@@ -90,11 +90,17 @@ export interface Team {
   oppg: number;
   pace: number;
   eFGPct: number;
-  tovPct: number;
-  orebPct: number;
+  tovPct: number;  // Kept for backwards compatibility
+  orebPct: number; // Kept for backwards compatibility
+  tovPerGame?: number;  // Turnovers per game (actual value)
+  orebPerGame?: number; // Offensive rebounds per game (actual value)
   sosRank: number;
   netRank: number;
   recentForm: ("W" | "L")[];
+  q1Record?: string;
+  q2Record?: string;
+  q3Record?: string;
+  q4Record?: string;
   color: string;
   rotobotScore: number;
   rotobotBlurb: string;
@@ -161,6 +167,13 @@ export interface PlayerRecord {
 
 // ── Game / Matchup ──────────────────────────────────────────────────────────
 
+export interface GameOdds {
+  homeML: number;
+  awayML: number;
+  spread: number;
+  total: number;
+}
+
 export interface Game {
   id: string;
   round: number;
@@ -175,6 +188,7 @@ export interface Game {
   pickReasoning: string;
   userPick?: string;
   isLive?: boolean;
+  odds?: GameOdds;
 }
 
 export interface MatchupNarrative {

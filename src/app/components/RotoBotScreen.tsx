@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Brain, Send, TrendingUp, Trophy, Target, Zap } from "lucide-react";
 import { RotoBotLogo } from "./RotoBotLogo";
+import { RotoBotAppPlug } from "./RotoBotAppPlug";
 // Chat uses hardcoded responses for now — Gemini integration planned for Phase 2
 
 interface Message {
@@ -100,7 +101,7 @@ export function RotoBotScreen() {
             </h1>
             <div className="flex items-center gap-2 mt-0.5">
               <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#22c55e" }} />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, color: "#22c55e" }}>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "#22c55e" }}>
                 Online • Processing 2,847 data points per game
               </span>
             </div>
@@ -108,22 +109,22 @@ export function RotoBotScreen() {
           <div className="ml-auto flex flex-col gap-1.5 text-right hidden sm:flex">
             <div className="flex items-center gap-2 justify-end">
               <Trophy size={11} color="#f59e0b" />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>64 Teams Tracked</span>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>64 Teams Tracked</span>
             </div>
             <div className="flex items-center gap-2 justify-end">
               <Target size={11} color="#00b8db" />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>74.2% 2024 Accuracy</span>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>74.2% 2024 Accuracy</span>
             </div>
             <div className="flex items-center gap-2 justify-end">
               <TrendingUp size={11} color="#22c55e" />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>32 Upsets Flagged</span>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>32 Upsets Flagged</span>
             </div>
           </div>
         </div>
 
         {/* Quick prompts */}
         <div className="mb-4">
-          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
             Quick questions
           </span>
           <div className="flex flex-wrap gap-2 mt-2">
@@ -136,7 +137,7 @@ export function RotoBotScreen() {
                   background: "rgba(255,255,255,0.05)",
                   border: "1px solid rgba(255,255,255,0.1)",
                   fontFamily: "Rubik, sans-serif",
-                  fontSize: 12,
+                  fontSize: 16,
                   color: "rgba(255,255,255,0.65)",
                   cursor: "pointer",
                 }}
@@ -221,9 +222,17 @@ export function RotoBotScreen() {
             <Send size={14} color="white" />
           </button>
         </div>
-        <p className="text-center mt-2" style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, color: "rgba(255,255,255,0.2)" }}>
+        <p className="text-center mt-2" style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, color: "rgba(255,255,255,0.2)" }}>
           RotoBot uses projected 2025–26 season data. Bracket seeds are unofficial until Selection Sunday.
         </p>
+
+        {/* CTA: this is a preview; full RotoBot app has live matchup props */}
+        <div className="mt-6">
+          <RotoBotAppPlug
+            variant="compact"
+            sectionTitle="This is a preview. For matchup props (moneyline, spread, O/U, first half), use the full RotoBot app."
+          />
+        </div>
       </div>
     </div>
   );

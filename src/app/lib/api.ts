@@ -78,14 +78,7 @@ export function fetchEspnRoster(teamSlug: string) {
   );
 }
 
-// ── Dynamic AI endpoints (always go through the backend) ────────────────────
-
-export function generateMatchup(team1Slug: string, team2Slug: string, round: number, region: string) {
-  return fetchJSON<import("../types/bracket").MatchupNarrative>(apiUrl("/api/matchup"), {
-    method: "POST",
-    body: JSON.stringify({ team1Slug, team2Slug, round, region }),
-  });
-}
+// ── Dynamic endpoints (always go through the backend) ────────────────────
 
 export function fetchAllNews() {
   return fetchJSON<Record<string, string>>(apiUrl("/api/news"));

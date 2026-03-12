@@ -4,7 +4,6 @@ import {
   useReducer,
   useEffect,
   useCallback,
-  useRef,
   type ReactNode,
 } from "react";
 import type {
@@ -12,13 +11,14 @@ import type {
   Game,
   PlayerRecord,
   ViewMode,
-  MatchupNarrative,
   BracketMatchupRaw,
 } from "../types/bracket";
-import { fetchTeams, fetchBracket, fetchAllPlayers, generateMatchup, fetchEspnLogos } from "../lib/api";
+import { fetchTeams, fetchBracket, fetchAllPlayers, fetchEspnLogos } from "../lib/api";
 import { rawMatchupToGame, buildRegionRounds, getRegionWinner, encodePicks, decodePicks } from "../lib/bracketUtils";
 
 // ── State ───────────────────────────────────────────────────────────────────
+
+export type BracketStyle = "standard" | "bold" | "chaos";
 
 interface BracketState {
   teams: Record<string, Team>;
@@ -26,9 +26,9 @@ interface BracketState {
   players: Record<string, PlayerRecord[]>;
   logos: Record<string, string>;
   userPicks: Record<string, string>;
-  narratives: Record<string, MatchupNarrative>;
-  loadingNarratives: Record<string, boolean>;
   viewMode: ViewMode;
+  bracketStyle: BracketStyle;
+  upsetTolerance: number;
   dataLoaded: boolean;
   dataError: string | null;
   toastMessage: string | null;
@@ -40,9 +40,9 @@ const initialState: BracketState = {
   players: {},
   logos: {},
   userPicks: {},
-  narratives: {},
-  loadingNarratives: {},
   viewMode: "rotobot",
+  bracketStyle: "standard",
+  upsetTolerance: 0,
   dataLoaded: false,
   dataError: null,
   toastMessage: null,
@@ -57,8 +57,8 @@ type Action =
   | { type: "SET_PICK"; gameId: string; teamId: string }
   | { type: "CLEAR_PICKS" }
   | { type: "SET_VIEW_MODE"; mode: ViewMode }
-  | { type: "SET_NARRATIVE"; key: string; narrative: MatchupNarrative }
-  | { type: "SET_NARRATIVE_LOADING"; key: string; loading: boolean }
+  | { type: "SET_BRACKET_STYLE"; style: BracketStyle }
+  | { type: "SET_UPSET_TOLERANCE"; value: number }
   | { type: "SET_TOAST"; message: string | null }
   | { type: "HYDRATE_PICKS"; picks: Record<string, string> };
 
@@ -86,16 +86,10 @@ function reducer(state: BracketState, action: Action): BracketState {
       return { ...state, userPicks: {} };
     case "SET_VIEW_MODE":
       return { ...state, viewMode: action.mode };
-    case "SET_NARRATIVE":
-      return {
-        ...state,
-        narratives: { ...state.narratives, [action.key]: action.narrative },
-      };
-    case "SET_NARRATIVE_LOADING":
-      return {
-        ...state,
-        loadingNarratives: { ...state.loadingNarratives, [action.key]: action.loading },
-      };
+    case "SET_BRACKET_STYLE":
+      return { ...state, bracketStyle: action.style };
+    case "SET_UPSET_TOLERANCE":
+      return { ...state, upsetTolerance: action.value };
     case "SET_TOAST":
       return { ...state, toastMessage: action.message };
     case "HYDRATE_PICKS":
@@ -112,6 +106,8 @@ interface BracketContextValue {
   makePick: (gameId: string, teamId: string) => void;
   clearPicks: () => void;
   setViewMode: (mode: ViewMode) => void;
+  setBracketStyle: (style: BracketStyle) => void;
+  setUpsetTolerance: (value: number) => void;
   dismissToast: () => void;
   getRegionGames: (region: string) => {
     r1: Game[];
@@ -121,9 +117,6 @@ interface BracketContextValue {
   };
   getRegionWinnerTeam: (region: string) => Team | null;
   getFinalFourTeams: () => (Team | null)[];
-  requestNarrative: (team1Slug: string, team2Slug: string, round: number, region: string) => void;
-  getNarrative: (team1Slug: string, team2Slug: string) => MatchupNarrative | undefined;
-  isNarrativeLoading: (team1Slug: string, team2Slug: string) => boolean;
   getShareURL: () => string;
   findGameById: (gameId: string) => Game | undefined;
 }
@@ -191,39 +184,106 @@ export function BracketProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_VIEW_MODE", mode });
   }, []);
 
+  const setBracketStyle = useCallback((style: BracketStyle) => {
+    dispatch({ type: "SET_BRACKET_STYLE", style });
+  }, []);
+
+  const setUpsetTolerance = useCallback((value: number) => {
+    dispatch({ type: "SET_UPSET_TOLERANCE", value });
+  }, []);
+
   const dismissToast = useCallback(() => {
     dispatch({ type: "SET_TOAST", message: null });
   }, []);
 
-  const getRegionGames = useCallback(
-    (region: string) => {
-      const r1 = state.r1Games[region] ?? [];
-      const { r2, s16, e8 } = buildRegionRounds(r1, region, state.userPicks, state.viewMode);
+  // Score each game's upset plausibility (0-100). Higher = more plausible upset.
+  const scoreUpsetPlausibility = useCallback((g: Game): number => {
+    const t1 = g.team1, t2 = g.team2;
+    const seedDiff = Math.abs(t1.seed - t2.seed);
+    if (seedDiff === 0) return 0;
 
-      const injectNarrative = (game: Game): Game => {
-        if (game.analysis) return game;
-        const key = narrativeKey(game.team1.id, game.team2.id);
-        const n = state.narratives[key];
-        if (!n) return game;
-        return {
-          ...game,
-          analysis: n.analysis,
-          proTeam1: n.proTeam1,
-          proTeam2: n.proTeam2,
-          rotobotPick: n.rotobotPick || game.rotobotPick,
-          rotobotConfidence: n.rotobotConfidence || game.rotobotConfidence,
-          pickReasoning: n.pickReasoning,
-        };
-      };
+    const favorite = t1.seed < t2.seed ? t1 : t2;
+    const underdog = t1.seed < t2.seed ? t2 : t1;
+
+    // Never predict 1-vs-16 upsets
+    if (favorite.seed === 1 && underdog.seed === 16) return 0;
+
+    // Historical plausibility scaled from actual NCAA upset rates (higher = more likely upset)
+    const seedPlausibility: Record<string, number> = {
+      "9-8": 90, "10-7": 75, "11-6": 75, "12-5": 70,
+      "13-4": 40, "14-3": 28, "15-2": 13,
+    };
+    const seedKey = `${underdog.seed}-${favorite.seed}`;
+    const basePlausibility = seedPlausibility[seedKey] ?? Math.max(5, 50 - seedDiff * 5);
+
+    // Data-driven adjustments
+    let dataBonus = 0;
+    const netGap = Math.abs(favorite.netRank - underdog.netRank);
+    if (netGap < 20) dataBonus += 20;
+    else if (netGap < 40) dataBonus += 12;
+    else if (netGap < 60) dataBonus += 5;
+
+    const efgGap = Math.abs(favorite.eFGPct - underdog.eFGPct);
+    if (efgGap < 2) dataBonus += 15;
+    else if (efgGap < 4) dataBonus += 8;
+
+    const underdogWins = (underdog.recentForm || []).filter(r => r === "W").length;
+    const formLen = (underdog.recentForm || []).length;
+    if (formLen >= 3 && underdogWins >= formLen * 0.7) dataBonus += 12;
+
+    // Moderate the original confidence — lower confidence means more plausible upset
+    const confBonus = Math.max(0, (80 - g.rotobotConfidence) * 0.5);
+
+    return Math.min(100, basePlausibility * 0.5 + dataBonus + confBonus);
+  }, []);
+
+  // Apply upset tolerance slider — at 0 all chalk, at 100 maximum plausible upsets
+  const applyUpsetTolerance = useCallback((games: Game[], tolerance: number): Game[] => {
+    if (tolerance === 0) return games;
+
+    // Score and rank all games by upset plausibility
+    const scored = games.map((g) => ({
+      game: g,
+      plausibility: scoreUpsetPlausibility(g),
+    }));
+
+    // Sort by plausibility descending — most plausible upsets flip first
+    const ranked = [...scored].sort((a, b) => b.plausibility - a.plausibility);
+
+    // Determine how many games to flip based on tolerance
+    const flippable = ranked.filter((s) => s.plausibility > 0);
+    const numToFlip = Math.round((tolerance / 100) * flippable.length);
+    const flipSet = new Set(flippable.slice(0, numToFlip).map((s) => s.game.id));
+
+    return games.map((g) => {
+      if (!flipSet.has(g.id)) return g;
+
+      const t1 = g.team1, t2 = g.team2;
+      const favorite = t1.seed < t2.seed ? t1 : t2;
+      const underdog = t1.seed < t2.seed ? t2 : t1;
+      const currentPickIsFavorite = g.rotobotPick === favorite.id || g.rotobotPick === favorite.name;
+      if (!currentPickIsFavorite) return g;
+
+      const plausibility = scoreUpsetPlausibility(g);
+      const newConf = Math.max(51, Math.min(68, 50 + plausibility * 0.2));
 
       return {
-        r1,
-        r2: r2.map(injectNarrative),
-        s16: s16.map(injectNarrative),
-        e8: e8.map(injectNarrative),
+        ...g,
+        rotobotPick: underdog.id,
+        rotobotConfidence: Math.round(newConf),
+        pickReasoning: `[Upset Pick] ${underdog.shortName} (${underdog.conference}, NET #${underdog.netRank}) has a credible path to upset ${favorite.shortName}. ${Math.abs(favorite.netRank - underdog.netRank) < 40 ? `NET rankings are closer than the seed line suggests (#${underdog.netRank} vs #${favorite.netRank}).` : ""} ${(underdog.recentForm || []).filter(r => r === "W").length >= 3 ? `${underdog.shortName} enters the tournament hot.` : ""}`.trim(),
       };
+    });
+  }, [scoreUpsetPlausibility]);
+
+  const getRegionGames = useCallback(
+    (region: string) => {
+      const rawR1 = state.r1Games[region] ?? [];
+      const r1 = applyUpsetTolerance(rawR1, state.upsetTolerance);
+      const { r2, s16, e8 } = buildRegionRounds(r1, region, state.userPicks, state.viewMode);
+      return { r1, r2, s16, e8 };
     },
-    [state.r1Games, state.userPicks, state.viewMode, state.narratives]
+    [state.r1Games, state.userPicks, state.viewMode, state.upsetTolerance, applyUpsetTolerance]
   );
 
   const getRegionWinnerTeam = useCallback(
@@ -237,48 +297,6 @@ export function BracketProvider({ children }: { children: ReactNode }) {
   const getFinalFourTeams = useCallback(() => {
     return ["East", "West", "South", "Midwest"].map((r) => getRegionWinnerTeam(r));
   }, [getRegionWinnerTeam]);
-
-  const narrativeKey = (s1: string, s2: string) => `${s1}_vs_${s2}`;
-
-  const pendingRef = useRef<Set<string>>(new Set());
-
-  const requestNarrative = useCallback(
-    async (team1Slug: string, team2Slug: string, round: number, region: string) => {
-      const key = narrativeKey(team1Slug, team2Slug);
-      if (pendingRef.current.has(key)) return;
-      pendingRef.current.add(key);
-
-      dispatch({ type: "SET_NARRATIVE_LOADING", key, loading: true });
-
-      const team1Name = state.teams[team1Slug]?.shortName ?? team1Slug;
-      const team2Name = state.teams[team2Slug]?.shortName ?? team2Slug;
-      dispatch({
-        type: "SET_TOAST",
-        message: `RotoBot is analyzing ${team1Name} vs ${team2Name}...`,
-      });
-
-      try {
-        const narrative = await generateMatchup(team1Slug, team2Slug, round, region);
-        dispatch({ type: "SET_NARRATIVE", key, narrative });
-      } catch (err) {
-        console.error("Narrative generation failed:", err);
-      } finally {
-        dispatch({ type: "SET_NARRATIVE_LOADING", key, loading: false });
-        setTimeout(() => dispatch({ type: "SET_TOAST", message: null }), 500);
-      }
-    },
-    [state.teams]
-  );
-
-  const getNarrative = useCallback(
-    (team1Slug: string, team2Slug: string) => state.narratives[narrativeKey(team1Slug, team2Slug)],
-    [state.narratives]
-  );
-
-  const isNarrativeLoading = useCallback(
-    (team1Slug: string, team2Slug: string) => !!state.loadingNarratives[narrativeKey(team1Slug, team2Slug)],
-    [state.loadingNarratives]
-  );
 
   const getShareURL = useCallback(() => {
     const hash = encodePicks(state.userPicks);
@@ -303,13 +321,12 @@ export function BracketProvider({ children }: { children: ReactNode }) {
     makePick,
     clearPicks,
     setViewMode,
+    setBracketStyle,
+    setUpsetTolerance,
     dismissToast,
     getRegionGames,
     getRegionWinnerTeam,
     getFinalFourTeams,
-    requestNarrative,
-    getNarrative,
-    isNarrativeLoading,
     getShareURL,
     findGameById,
   };

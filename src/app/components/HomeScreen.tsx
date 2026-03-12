@@ -13,7 +13,7 @@ function ConfidenceBar({ value }: { value: number }) {
       <div className="flex-1 h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.1)" }}>
         <div className="h-full rounded-full transition-all" style={{ width: `${value}%`, background: color }} />
       </div>
-      <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, fontWeight: 600, color, minWidth: 32, textAlign: "right" }}>
+      <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 600, color, minWidth: 32, textAlign: "right" }}>
         {value}%
       </span>
     </div>
@@ -27,7 +27,7 @@ function TeamSeedBadge({ seed, color }: { seed: number; color: string }) {
       style={{
         width: 22, height: 22,
         background: `${color}22`, border: `1px solid ${color}44`,
-        fontFamily: "Rubik, sans-serif", fontSize: 11, fontWeight: 700, color,
+        fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 700, color,
       }}
     >
       {seed}
@@ -52,7 +52,7 @@ function FeaturedMatchup({ game }: { game: Game }) {
             className="px-2 py-0.5 rounded-full"
             style={{
               background: "rgba(0,184,219,0.12)", border: "1px solid rgba(0,184,219,0.2)",
-              fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 600,
+              fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 600,
               color: "#00b8db", textTransform: "uppercase", letterSpacing: "0.5px",
             }}
           >
@@ -68,20 +68,20 @@ function FeaturedMatchup({ game }: { game: Game }) {
                 <TeamSeedBadge seed={team.seed} color={isPick ? "#00b8db" : "rgba(255,255,255,0.3)"} />
                 <TeamLogo teamSlug={team.id} teamShortName={team.shortName} teamColor={team.color} size={28} />
                 <span style={{
-                  fontFamily: "Rubik, sans-serif", fontSize: 13,
+                  fontFamily: "Rubik, sans-serif", fontSize: 16,
                   fontWeight: isPick ? 600 : 400,
                   color: isPick ? "white" : "rgba(255,255,255,0.6)", flex: 1,
                 }}>
                   {team.shortName}
                 </span>
-                <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+                <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.35)" }}>
                   {team.record}
                 </span>
                 {isPick && (
                   <div className="flex items-center gap-1 px-2 py-0.5 rounded-full"
                     style={{ background: "rgba(0,184,219,0.15)", border: "1px solid rgba(0,184,219,0.3)" }}>
                     <Brain size={9} color="#00b8db" />
-                    <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 600, color: "#00b8db" }}>PICK</span>
+                    <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 600, color: "#00b8db" }}>PICK</span>
                   </div>
                 )}
               </div>
@@ -91,7 +91,7 @@ function FeaturedMatchup({ game }: { game: Game }) {
 
         <ConfidenceBar value={game.rotobotConfidence} />
 
-        <p className="mt-3 line-clamp-2" style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
+        <p className="mt-3 line-clamp-2" style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
           {(game.analysis || "").slice(0, 120)}...
         </p>
       </div>
@@ -109,11 +109,11 @@ function StatCard({ icon: Icon, value, label, sub, color }: {
         <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${color}18` }}>
           <Icon size={15} color={color} />
         </div>
-        <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{label}</span>
+        <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.45)" }}>{label}</span>
       </div>
       <div>
         <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 26, fontWeight: 700, color: "white", lineHeight: 1 }}>{value}</div>
-        {sub && <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color, marginTop: 3 }}>{sub}</div>}
+        {sub && <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color, marginTop: 3 }}>{sub}</div>}
       </div>
     </div>
   );
@@ -130,9 +130,38 @@ export function HomeScreen() {
       allR1.push(...getRegionGames(region).r1);
     }
 
-    // Featured: closest matchups (low confidence = high intrigue)
-    const sorted = [...allR1].sort((a, b) => a.rotobotConfidence - b.rotobotConfidence);
-    const featured = sorted.slice(0, 4);
+    // Featured: one per seed-pair type so we don't show four 8-9 games
+    const seedPairKey = (g: Game) => {
+      const lo = Math.min(g.team1.seed, g.team2.seed);
+      const hi = Math.max(g.team1.seed, g.team2.seed);
+      return `${lo}-${hi}`;
+    };
+    const byPair = new Map<string, Game[]>();
+    for (const g of allR1) {
+      const key = seedPairKey(g);
+      if (!byPair.has(key)) byPair.set(key, []);
+      byPair.get(key)!.push(g);
+    }
+    // Prefer variety: 5-12, 6-11, 7-10, 8-9 (one each), then fill by intrigue
+    const pairOrder = ["5-12", "6-11", "7-10", "8-9", "4-13", "3-14", "2-15", "1-16"];
+    const featured: Game[] = [];
+    for (const key of pairOrder) {
+      const games = byPair.get(key);
+      if (!games?.length) continue;
+      // Pick the most intriguing (lowest confidence) in this pair
+      const best = games.slice().sort((a, b) => a.rotobotConfidence - b.rotobotConfidence)[0];
+      featured.push(best);
+      if (featured.length >= 4) break;
+    }
+    // If we still have fewer than 4, add by lowest confidence from remaining
+    if (featured.length < 4) {
+      const used = new Set(featured.map((g) => g.id));
+      const rest = allR1.filter((g) => !used.has(g.id)).sort((a, b) => a.rotobotConfidence - b.rotobotConfidence);
+      for (const g of rest) {
+        featured.push(g);
+        if (featured.length >= 4) break;
+      }
+    }
 
     // Top 4 teams by rotobotScore across all regions
     const teams: Team[] = [];
@@ -173,7 +202,7 @@ export function HomeScreen() {
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-4"
               style={{ background: "rgba(0,184,219,0.1)", border: "1px solid rgba(0,184,219,0.25)" }}>
               <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#00b8db" }} />
-              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, fontWeight: 600, color: "#00b8db" }}>
+              <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 600, color: "#00b8db" }}>
                 2025-26 March Madness • Bracket Preview
               </span>
             </div>
@@ -211,7 +240,7 @@ export function HomeScreen() {
               <div className="px-5 pt-5 pb-4">
                 <div className="flex items-center gap-2 mb-4">
                   <Star size={14} color="#00b8db" />
-                  <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, fontWeight: 700, color: "#00b8db", textTransform: "uppercase", letterSpacing: "1px" }}>
+                  <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, fontWeight: 700, color: "#00b8db", textTransform: "uppercase", letterSpacing: "1px" }}>
                     RotoBot's #1 Overall
                   </span>
                 </div>
@@ -223,7 +252,7 @@ export function HomeScreen() {
                         <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "white" }}>
                           {topTeams[0].shortName}
                         </div>
-                        <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+                        <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 15, color: "rgba(255,255,255,0.4)" }}>
                           {topTeams[0].record} • {topTeams[0].conference} • NET #{topTeams[0].netRank}
                         </div>
                       </div>
@@ -234,7 +263,7 @@ export function HomeScreen() {
                         </span>
                       </div>
                     </div>
-                    <p style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
+                    <p style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.45)", lineHeight: 1.5 }}>
                       {(topTeams[0].rotobotBlurb || "").slice(0, 150)}...
                     </p>
                   </>
@@ -260,7 +289,7 @@ export function HomeScreen() {
                 Projected Regional Champions
               </h2>
               <Link to="/bracket" className="no-underline flex items-center gap-1"
-                style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, color: "#00b8db", fontWeight: 500 }}>
+                style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "#00b8db", fontWeight: 500 }}>
                 Full bracket <ArrowRight size={13} />
               </Link>
             </div>
@@ -277,7 +306,7 @@ export function HomeScreen() {
                     <div className="p-4">
                       <div className="flex items-center justify-between mb-3">
                         <div className="inline-block px-2 py-0.5 rounded-full"
-                          style={{ background: `${rc}18`, border: `1px solid ${rc}33`, fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 600, color: rc }}>
+                          style={{ background: `${rc}18`, border: `1px solid ${rc}33`, fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 600, color: rc }}>
                           {region}
                         </div>
                         <div className="flex items-center gap-0.5">
@@ -293,48 +322,35 @@ export function HomeScreen() {
                           <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 600, color: "white" }}>
                             {team.shortName}
                           </div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, color: "rgba(255,255,255,0.4)" }}>
                             #{team.seed} • {team.record} • {team.conference}
                           </div>
                         </div>
                         <div className="flex items-center justify-center rounded-full shrink-0"
                           style={{ width: 38, height: 38, background: `${rc}15`, border: `2px solid ${rc}40` }}>
-                          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 800, color: rc }}>
+                          <span style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 800, color: rc }}>
                             {Math.round(team.rotobotScore)}
                           </span>
                         </div>
                       </div>
 
-                      {/* Key stats grid */}
-                      <div className="grid grid-cols-3 gap-1.5 mb-3">
+                      {/* Key stats grid — PPG, OPPG, eFG%, NET only (Q1 Rec / SOS removed) */}
+                      <div className="grid grid-cols-4 gap-1.5 mb-3">
                         <div className="rounded-lg px-2 py-1.5 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 700, color: "white" }}>{team.ppg}</div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>PPG</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "white" }}>{team.ppg}</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>PPG</div>
                         </div>
                         <div className="rounded-lg px-2 py-1.5 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 700, color: "white" }}>{team.oppg}</div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>OPPG</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "white" }}>{team.oppg}</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>OPPG</div>
                         </div>
                         <div className="rounded-lg px-2 py-1.5 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 700, color: "white" }}>{team.eFGPct}%</div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>eFG%</div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-1.5 mb-3">
-                        <div className="rounded-lg px-2 py-1.5 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 700, color: "white" }}>
-                            {team.stats?.schedule?.q1Record || "—"}
-                          </div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Q1 Rec</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "white" }}>{team.eFGPct}%</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>eFG%</div>
                         </div>
                         <div className="rounded-lg px-2 py-1.5 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 700, color: "white" }}>#{team.netRank}</div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>NET</div>
-                        </div>
-                        <div className="rounded-lg px-2 py-1.5 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, fontWeight: 700, color: "white" }}>#{team.sosRank}</div>
-                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 8, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>SOS</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 700, color: "white" }}>#{team.netRank}</div>
+                          <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.35)", textTransform: "uppercase", letterSpacing: "0.5px" }}>NET</div>
                         </div>
                       </div>
 
@@ -344,10 +360,10 @@ export function HomeScreen() {
                           style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}>
                           <Star size={10} color={rc} className="shrink-0" />
                           <div className="min-w-0">
-                            <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.7)" }}>
+                            <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.7)" }}>
                               {team.keyPlayer}
                             </div>
-                            <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 9, color: "rgba(255,255,255,0.35)" }}>
+                            <div style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.35)" }}>
                               {team.keyPlayerStat}
                             </div>
                           </div>
@@ -359,7 +375,7 @@ export function HomeScreen() {
                         <div className="flex flex-wrap gap-1 mb-2.5">
                           {team.styleTags.filter(t => t && t !== "nan").slice(0, 3).map((tag) => (
                             <span key={tag} className="px-1.5 py-0.5 rounded"
-                              style={{ fontFamily: "Rubik, sans-serif", fontSize: 9, fontWeight: 500, color: "rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.06)" }}>
+                              style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, fontWeight: 500, color: "rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.06)" }}>
                               {tag}
                             </span>
                           ))}
@@ -367,13 +383,13 @@ export function HomeScreen() {
                       )}
 
                       {blurb && (
-                        <p className="mt-0 line-clamp-2" style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, color: "rgba(255,255,255,0.4)", lineHeight: 1.5, margin: 0 }}>
+                        <p className="mt-0 line-clamp-2" style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, color: "rgba(255,255,255,0.4)", lineHeight: 1.5, margin: 0 }}>
                           {blurb.slice(0, 120)}{blurb.length > 120 ? "..." : ""}
                         </p>
                       )}
 
                       <div className="flex items-center gap-1 mt-2.5"
-                        style={{ fontFamily: "Rubik, sans-serif", fontSize: 10, color: rc, fontWeight: 500 }}>
+                        style={{ fontFamily: "Rubik, sans-serif", fontSize: 14, color: rc, fontWeight: 500 }}>
                         View region <ChevronRight size={11} />
                       </div>
                     </div>
@@ -392,12 +408,12 @@ export function HomeScreen() {
                 <h2 style={{ fontFamily: "Rubik, sans-serif", fontSize: 18, fontWeight: 700, color: "white" }}>
                   Games to Watch
                 </h2>
-                <p style={{ fontFamily: "Rubik, sans-serif", fontSize: 12, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>
+                <p style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>
                   RotoBot's highest-intrigue first-round matchups
                 </p>
               </div>
               <Link to="/bracket" className="no-underline flex items-center gap-1"
-                style={{ fontFamily: "Rubik, sans-serif", fontSize: 13, color: "#00b8db", fontWeight: 500 }}>
+                style={{ fontFamily: "Rubik, sans-serif", fontSize: 16, color: "#00b8db", fontWeight: 500 }}>
                 View all <ArrowRight size={13} />
               </Link>
             </div>
@@ -408,6 +424,7 @@ export function HomeScreen() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

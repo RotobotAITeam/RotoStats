@@ -29,7 +29,7 @@ export function Toast() {
       <span
         style={{
           fontFamily: "Rubik, sans-serif",
-          fontSize: 13,
+          fontSize: 16,
           fontWeight: 500,
           color: "rgba(255,255,255,0.9)",
         }}
